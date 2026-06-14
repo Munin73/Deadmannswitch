@@ -1,0 +1,78 @@
+name: Dead Mans Switch
+on:
+  schedule:
+    - cron: '0 6 * * *'      # daglig sjekk kl 06:00 UTC
+  workflow_dispatch:          # manuell innsjekk fra mobil
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Innsjekk (manuell trigger fra mobil)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          date +%s > last_checkin.txt
+          rm -f sent.flag
+          git config user.name "deadman-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Innsjekk $(date -u +%FT%TZ)"
+          git push
+
+      - name: Vurder inaktivitet (planlagt kjoring)
+        if: github.event_name == 'schedule'
+        run: |
+          [ -f sent.flag ] && { echo "Allerede sendt, hopper over."; exit 0; }
+          LAST=$(cat last_checkin.txt)
+          NOW=$(date +%s)
+          DAYS=$(( (NOW - LAST) / 86400 ))
+          echo "Dager siden siste innsjekk: $DAYS"
+          if [ "$DAYS" -ge 7 ]; then
+            echo "MODE=send" >> "$GITHUB_ENV"
+          elif [ "$DAYS" -ge 1 ]; then
+            echo "MODE=warn" >> "$GITHUB_ENV"
+            echo "DAYS_LEFT=$(( 7 - DAYS ))" >> "$GITHUB_ENV"
+          fi
+
+      - name: Send forvarsel til John
+        if: github.event_name == 'schedule' && env.MODE == 'warn'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USER }}
+          password: ${{ secrets.MAIL_PASS }}
+          from: ${{ secrets.MAIL_USER }}
+          to: john@riis.cc
+          subject: "Forvarsel: ${{ env.DAYS_LEFT }} dag(er) igjen"
+          body: "Du har ikke sjekket inn. Brevet sendes automatisk til arne@riis.cc om ${{ env.DAYS_LEFT }} dag(er) hvis du ikke sjekker inn fra mobilen."
+
+      - name: Send brevet til Arne
+        if: github.event_name == 'schedule' && env.MODE == 'send'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USER }}
+          password: ${{ secrets.MAIL_PASS }}
+          from: ${{ secrets.MAIL_USER }}
+          to: arne@riis.cc
+          subject: "Automatisk melding"
+          body: file://brev.txt
+
+      - name: Marker som sendt
+        if: github.event_name == 'schedule' && env.MODE == 'send'
+        run: |
+          touch sent.flag
+          git config user.name "deadman-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Brev sendt $(date -u +%FT%TZ)"
+          git push
