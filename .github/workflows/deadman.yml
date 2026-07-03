@@ -2,10 +2,24 @@ name: Dead Mans Switch
 on:
   schedule:
     - cron: '0 6 * * *'      # daglig sjekk kl 06:00 UTC
-  workflow_dispatch:          # manuell innsjekk fra mobil
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Hva vil du gjore?"
+        type: choice
+        default: checkin
+        options:
+          - checkin
+          - test-varsel
+          - test-brev
 
 permissions:
   contents: write
+
+env:
+  WARN_TO:   ${{ vars.WARN_TO   || 'john@riis.cc' }}
+  LETTER_TO: ${{ vars.LETTER_TO || 'arne@riis.cc' }}
+  SEND_AFTER: ${{ vars.SEND_AFTER || 7 }}
 
 jobs:
   run:
@@ -13,8 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Innsjekk (manuell trigger fra mobil)
-        if: github.event_name == 'workflow_dispatch'
+      # ---------- INNSJEKK (fra mobil eller Actions-fanen) ----------
+      - name: Innsjekk
+        if: github.event_name == 'workflow_dispatch' && (inputs.action == 'checkin' || inputs.action == '')
         run: |
           date +%s > last_checkin.txt
           rm -f sent.flag
@@ -24,23 +39,25 @@ jobs:
           git commit -m "Innsjekk $(date -u +%FT%TZ)"
           git push
 
-      - name: Vurder inaktivitet (planlagt kjoring)
+      # ---------- DAGLIG VURDERING ----------
+      - name: Vurder inaktivitet
         if: github.event_name == 'schedule'
         run: |
-          [ -f sent.flag ] && { echo "Allerede sendt, hopper over."; exit 0; }
+          [ -f sent.flag ] && { echo "Allerede sendt."; exit 0; }
           LAST=$(cat last_checkin.txt)
           NOW=$(date +%s)
           DAYS=$(( (NOW - LAST) / 86400 ))
-          echo "Dager siden siste innsjekk: $DAYS"
-          if [ "$DAYS" -ge 7 ]; then
+          echo "Dager siden innsjekk: $DAYS (sendes etter $SEND_AFTER)"
+          if [ "$DAYS" -ge "$SEND_AFTER" ]; then
             echo "MODE=send" >> "$GITHUB_ENV"
           elif [ "$DAYS" -ge 1 ]; then
             echo "MODE=warn" >> "$GITHUB_ENV"
-            echo "DAYS_LEFT=$(( 7 - DAYS ))" >> "$GITHUB_ENV"
+            echo "DAYS_LEFT=$(( SEND_AFTER - DAYS ))" >> "$GITHUB_ENV"
           fi
 
-      - name: Send forvarsel til John
-        if: github.event_name == 'schedule' && env.MODE == 'warn'
+      # ---------- FORVARSEL ----------
+      - name: Send forvarsel
+        if: (github.event_name == 'schedule' && env.MODE == 'warn') || inputs.action == 'test-varsel'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -49,12 +66,13 @@ jobs:
           username: ${{ secrets.MAIL_USER }}
           password: ${{ secrets.MAIL_PASS }}
           from: ${{ secrets.MAIL_USER }}
-          to: john@riis.cc
-          subject: "Forvarsel: ${{ env.DAYS_LEFT }} dag(er) igjen"
-          body: "Du har ikke sjekket inn. Brevet sendes automatisk til arne@riis.cc om ${{ env.DAYS_LEFT }} dag(er) hvis du ikke sjekker inn fra mobilen."
+          to: ${{ env.WARN_TO }}
+          subject: "Forvarsel: ${{ env.DAYS_LEFT || 'TEST' }} dag(er) igjen"
+          body: "Du har ikke sjekket inn. Brevet sendes til ${{ env.LETTER_TO }} om ${{ env.DAYS_LEFT || 'X' }} dag(er) hvis du ikke sjekker inn. (Er dette en test, kan du se bort fra meldingen.)"
 
-      - name: Send brevet til Arne
-        if: github.event_name == 'schedule' && env.MODE == 'send'
+      # ---------- SELVE BREVET ----------
+      - name: Send brevet
+        if: (github.event_name == 'schedule' && env.MODE == 'send') || inputs.action == 'test-brev'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -63,10 +81,11 @@ jobs:
           username: ${{ secrets.MAIL_USER }}
           password: ${{ secrets.MAIL_PASS }}
           from: ${{ secrets.MAIL_USER }}
-          to: arne@riis.cc
+          to: ${{ env.LETTER_TO }}
           subject: "Automatisk melding"
           body: file://brev.txt
 
+      # ---------- MARKER SOM SENDT (kun ekte utlosning) ----------
       - name: Marker som sendt
         if: github.event_name == 'schedule' && env.MODE == 'send'
         run: |
