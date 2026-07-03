@@ -60,9 +60,9 @@ jobs:
         if: (github.event_name == 'schedule' && env.MODE == 'warn') || inputs.action == 'test-varsel'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
           username: ${{ secrets.MAIL_USER }}
           password: ${{ secrets.MAIL_PASS }}
           from: ${{ secrets.MAIL_USER }}
@@ -75,9 +75,9 @@ jobs:
         if: (github.event_name == 'schedule' && env.MODE == 'send') || inputs.action == 'test-brev'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
           username: ${{ secrets.MAIL_USER }}
           password: ${{ secrets.MAIL_PASS }}
           from: ${{ secrets.MAIL_USER }}
